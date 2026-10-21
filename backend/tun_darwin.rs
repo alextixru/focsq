@@ -229,16 +229,28 @@ fn private_socket_dir() -> Result<PathBuf> {
 }
 
 fn launch_helper(helper: &Path, socket: &Path) -> Result<Option<Child>> {
-    if unsafe { libc::geteuid() } == 0 {
-        let child = Command::new(helper)
-            .arg("--sock")
-            .arg(socket)
+    let spawn = |command: &mut Command| -> Result<Child> {
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
-            .with_context(|| format!("запуск {}", helper.display()))?;
-        return Ok(Some(child));
+            .with_context(|| format!("запуск {}", helper.display()))
+    };
+    if unsafe { libc::geteuid() } == 0 {
+        return spawn(Command::new(helper).arg("--sock").arg(socket)).map(Some);
+    }
+    // Беспарольный sudo (NOPASSWD в sudoers) — без диалога при каждом подключении
+    if sudo_without_password() {
+        crate::log_error!("[TUN] Помощник запускается через sudo (NOPASSWD)");
+        return spawn(
+            Command::new("/usr/bin/sudo")
+                .args(["-n", "--"])
+                .arg(helper)
+                .arg("--sock")
+                .arg(socket),
+        )
+        .map(Some);
     }
     crate::log_error!("[TUN] Запрос прав администратора для настройки туннеля…");
     let command = format!(
@@ -262,6 +274,18 @@ fn launch_helper(helper: &Path, socket: &Path) -> Result<Option<Child>> {
         );
     }
     Ok(None)
+}
+
+/// sudo без пароля доступен (NOPASSWD): `sudo -n` не спрашивает, а сразу
+/// падает, если пароль нужен.
+fn sudo_without_password() -> bool {
+    Command::new("/usr/bin/sudo")
+        .args(["-n", "/usr/bin/true"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn accept_helper(listener: &UnixListener, mut child: Option<&mut Child>) -> Result<UnixStream> {
