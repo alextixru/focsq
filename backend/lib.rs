@@ -33,6 +33,9 @@ mod udp_batch;
 #[cfg(target_os = "linux")]
 // [FOCSQ] Нативный Linux TUN (/dev/net/tun + netlink-маршруты)
 pub mod tun_linux;
+#[cfg(target_os = "macos")]
+// [FOCSQ] Нативный macOS TUN (utun через root-помощник csqtt-tun-helper)
+pub mod tun_darwin;
 mod turn;
 mod turn_core;
  mod vk_js_calls;
@@ -259,7 +262,7 @@ pub async fn run_client(arguments: ClientConfig, external_cancel: Option<Cancell
     // в исключения тюна. Иначе после 0/1+128/1 запросы vkcalls/auto_js
     // уходят в туннель на невыключенный CDN-IP и отваливаются — путь
     // звонков деградирует до капчи.
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     schedule_vk_endpoint_excludes(cancel.clone());
     let captcha = CaptchaSolver::new(&arguments.captcha_mode, cancel.clone());
     set_active_captcha(captcha.clone());
@@ -300,12 +303,13 @@ pub async fn run_client(arguments: ClientConfig, external_cancel: Option<Cancell
     let pool = PacketPool::new(packet_pool_size(workers));
     let tun_uds = (!arguments.tun_uds.is_empty()).then_some(arguments.tun_uds.clone());
     // [FOCSQ] Нативный TUN: ядро само создаёт интерфейс и применяет TUNCONF.
-    // Windows — «wintun», Linux — «tun» (имя интерфейса по умолчанию csqtt).
+    // Windows — «wintun», Linux — «tun» (имя интерфейса по умолчанию csqtt),
+    // macOS — любое непустое значение (utunN выбирает ОС).
     #[cfg(windows)]
     let native_tun = arguments.tun_uds.eq_ignore_ascii_case("wintun");
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let native_tun = !arguments.tun_uds.is_empty();
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let native_tun = false;
     let tun_peer_ip = native_tun.then(|| peer.ip().to_string());
     let dispatcher_result = Dispatcher::start(
@@ -391,7 +395,18 @@ pub async fn run_client(arguments: ClientConfig, external_cancel: Option<Cancell
                         }
                     }
                 }
-                #[cfg(not(any(windows, target_os = "linux")))]
+                #[cfg(target_os = "macos")]
+                if let (true, Some(peer_ip)) = (native_tun, tun_peer_ip.as_deref()) {
+                    match crate::tun_darwin::apply_tunconf(ip, dns, peer_ip).await {
+                        Ok(()) => {
+                            crate::log_error!("[КЛИЕНТ] TUN-адаптер настроен (IP/DNS/маршруты)")
+                        }
+                        Err(error) => {
+                            crate::log_error!("[ОШИБКА] Настройка TUN не удалась: {error:#}")
+                        }
+                    }
+                }
+                #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
                 let _ = (&native_tun, &tun_peer_ip, ip, dns);
             }
             config_events.config(&config);
@@ -460,6 +475,10 @@ pub async fn run_client(arguments: ClientConfig, external_cancel: Option<Cancell
     if native_tun {
         tun_linux::drop_interface_now();
     }
+    #[cfg(target_os = "macos")]
+    if native_tun {
+        tun_darwin::drop_interface_now();
+    }
     if !groups_completed {
         groups_future.await;
     }
@@ -497,7 +516,11 @@ pub async fn run_client(arguments: ClientConfig, external_cancel: Option<Cancell
     if native_tun {
         tun_linux::teardown();
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    if native_tun {
+        tun_darwin::teardown();
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let _ = native_tun;
     shutdown_events.stopped();
     crate::log_error!("[КЛИЕНТ] Все воркеры завершены");
@@ -608,7 +631,7 @@ pub async fn run_vk_hash_validation(arguments: &ClientConfig) -> Result<()> {
 /// пока системные DNS ещё не перехвачены, и переодически обновляются:
 /// CDN VK ротирует IP, поэтому одноразового резолва мало. IP уходят
 /// в отложенные exclude-маршруты (до TUNCONF) либо добавляются сразу.
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 fn schedule_vk_endpoint_excludes(cancel: tokio_util::sync::CancellationToken) {
     const HOSTS: &[&str] = &[
         "api.vk.me",
@@ -642,6 +665,8 @@ fn schedule_vk_endpoint_excludes(cancel: tokio_util::sync::CancellationToken) {
                             crate::tun_win::exclude_host_ip(addr.ip());
                             #[cfg(target_os = "linux")]
                             crate::tun_linux::exclude_host_ip(addr.ip());
+                            #[cfg(target_os = "macos")]
+                            crate::tun_darwin::exclude_host_ip(addr.ip());
                         }
                     }
                 }

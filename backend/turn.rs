@@ -282,6 +282,8 @@ impl TurnAllocation {
         crate::tun_win::exclude_host_ip(server.ip());
         #[cfg(target_os = "linux")]
         crate::tun_linux::exclude_host_ip(server.ip());
+        #[cfg(target_os = "macos")]
+        crate::tun_darwin::exclude_host_ip(server.ip());
         crate::log_error!("[TURN] Транспорт: {}", transport.as_str());
         let control_transport = if transport == TurnWireTransport::Udp {
             TurnControlTransport::Datagram

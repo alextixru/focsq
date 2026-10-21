@@ -447,6 +447,7 @@ dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
  "bytes",
+ "core-foundation",
  "crc32fast",
  "crossbeam-queue",
  "ctr",

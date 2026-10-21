@@ -474,7 +474,8 @@ impl Dispatcher {
             // [FOCSQ] Десктоп-порт: TUN открываем САМИ (Android-модель
             // с получением FD по UDS отсюда вырезана — ей нужен хост-приложение
             // с FdReceiver, у нас его нет). Windows — wintun-адаптер, Linux —
-            // /dev/net/tun через tun_linux. Дальше — общий run_tun апстрима.
+            // /dev/net/tun через tun_linux, macOS — utun через tun_darwin.
+            // Дальше — общий run_tun апстрима.
             let (fd_tx, mut fd_rx) = mpsc::channel::<std::fs::File>(4);
             // [FOCSQ] fd_tx НЕ дропаем: закрытый канал будил бы
             // replacements.recv() в run_tun мгновенно (None), и select!
@@ -496,11 +497,24 @@ impl Dispatcher {
             #[cfg(windows)]
             anyhow::bail!("TUN-режим {name:?} не поддерживается на Windows (доступен только wintun)");
             #[cfg(target_os = "linux")]
-            {
+            let file = {
                 let interface = if name == "tun" { "csqtt".to_owned() } else { name };
                 let device = crate::tun_linux::TunDevice::open(&interface)?;
                 let file = device.nonblocking_file()?;
                 crate::log_error!("[КЛИЕНТ] TUN-интерфейс {interface} открыт нативно");
+                file
+            };
+            // [FOCSQ] macOS: utun создаёт root-помощник и передаёт fd (tun_darwin.rs),
+            // имя интерфейса (utunN) выбирает ядро ОС
+            #[cfg(target_os = "macos")]
+            let file = {
+                let _ = name;
+                crate::tun_darwin::open().await?
+            };
+            #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+            anyhow::bail!("TUN-режим {name:?} не поддерживается на этой ОС");
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
                 return_latency_rx.resume();
                 return_priority_rx.resume();
                 return_rx.resume();
@@ -705,19 +719,7 @@ impl Dispatcher {
                 };
                 let result = client_perf::measure_sampled(PerfStage::TunRx, 64, || {
                     guard.try_io(|inner| {
-                        let area = packet.read_area();
-                        let length = unsafe {
-                            libc::read(
-                                inner.get_ref().as_raw_fd(),
-                                area.as_mut_ptr().cast(),
-                                area.len(),
-                            )
-                        };
-                        if length < 0 {
-                            Err(std::io::Error::last_os_error())
-                        } else {
-                            Ok(length as usize)
-                        }
+                        read_tun_packet(inner.get_ref().as_raw_fd(), packet.read_area())
                     })
                 });
                 match result {
@@ -951,19 +953,7 @@ impl Dispatcher {
 
         let result = client_perf::measure_sampled(PerfStage::TunTx, 64, || {
             guard.try_io(|inner| {
-                let remaining = &packet.as_slice()[*written..];
-                let length = unsafe {
-                    libc::write(
-                        inner.get_ref().as_raw_fd(),
-                        remaining.as_ptr().cast(),
-                        remaining.len(),
-                    )
-                };
-                if length < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(length as usize)
-                }
+                write_tun_packet(inner.get_ref().as_raw_fd(), &packet.as_slice()[*written..])
             })
         });
         match result {
@@ -1368,6 +1358,87 @@ where
     })
 }
 
+/// Прочитать один IP-пакет из TUN.
+/// [FOCSQ] macOS: utun отдаёт пакет с 4-байтовым заголовком семейства
+/// адресов — читаем его отдельным буфером (readv) и в длину не считаем.
+#[cfg(unix)]
+fn read_tun_packet(descriptor: std::os::fd::RawFd, area: &mut [u8]) -> std::io::Result<usize> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut family = [0u8; 4];
+        let mut slices = [
+            libc::iovec {
+                iov_base: family.as_mut_ptr().cast(),
+                iov_len: family.len(),
+            },
+            libc::iovec {
+                iov_base: area.as_mut_ptr().cast(),
+                iov_len: area.len(),
+            },
+        ];
+        let length = unsafe { libc::readv(descriptor, slices.as_mut_ptr(), slices.len() as i32) };
+        if length < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        match length as usize {
+            0 => Ok(0),
+            // Заголовок без пакета: не EOF — повторить чтение
+            1..=4 => Err(std::io::ErrorKind::Interrupted.into()),
+            length => Ok(length - family.len()),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let length = unsafe { libc::read(descriptor, area.as_mut_ptr().cast(), area.len()) };
+        if length < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(length as usize)
+        }
+    }
+}
+
+/// Записать IP-пакет (или его остаток) в TUN.
+/// [FOCSQ] macOS: utun ждёт 4-байтовый заголовок семейства адресов
+/// (AF_INET/AF_INET6, big-endian). Пакет уходит целиком или никак, поэтому
+/// заголовок пишется вместе с ним (writev) и из длины вычитается.
+#[cfg(unix)]
+fn write_tun_packet(descriptor: std::os::fd::RawFd, packet: &[u8]) -> std::io::Result<usize> {
+    #[cfg(target_os = "macos")]
+    {
+        let family = match packet.first().map(|byte| byte >> 4) {
+            Some(6) => libc::AF_INET6,
+            _ => libc::AF_INET,
+        } as u32;
+        let family = family.to_be_bytes();
+        let slices = [
+            libc::iovec {
+                iov_base: family.as_ptr() as *mut libc::c_void,
+                iov_len: family.len(),
+            },
+            libc::iovec {
+                iov_base: packet.as_ptr() as *mut libc::c_void,
+                iov_len: packet.len(),
+            },
+        ];
+        let length = unsafe { libc::writev(descriptor, slices.as_ptr(), slices.len() as i32) };
+        if length < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok((length as usize).saturating_sub(family.len()))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let length = unsafe { libc::write(descriptor, packet.as_ptr().cast(), packet.len()) };
+        if length < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(length as usize)
+        }
+    }
+}
+
 #[cfg(unix)]
 fn is_closed_tun_error(error: &std::io::Error) -> bool {
     matches!(
@@ -1450,7 +1521,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use std::collections::VecDeque;
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     use std::{
         fs::File,
         io::{IoSlice, Write},
@@ -1460,7 +1531,8 @@ mod tests {
         },
     };
 
-    #[cfg(unix)]
+    // [FOCSQ] Абстрактные UDS и SOCK_CLOEXEC есть только в Linux/Android
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn send_uds_fd(name: &str, file: &File) {
         use nix::sys::socket::{
             AddressFamily, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, connect,
