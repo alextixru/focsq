@@ -1,5 +1,7 @@
-﻿// SPDX-FileCopyrightText: 2026 luminescq
+// SPDX-FileCopyrightText: 2026 luminescq
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import '../theme/app_colors.dart';
@@ -17,6 +19,10 @@ class _CustomTitleBarState extends State<CustomTitleBar> {
 
   @override
   Widget build(BuildContext context) {
+    // [FOCSQ] macOS: окно со скрытым заголовком сохраняет системные кнопки
+    // («светофор») слева — декоративные точки и свои кнопки не рисуем,
+    // название сдвигаем правее системных кнопок.
+    final macOS = Platform.isMacOS;
     return Container(
       height: 40,
       decoration: BoxDecoration(
@@ -33,21 +39,23 @@ class _CustomTitleBarState extends State<CustomTitleBar> {
           Expanded(
             child: DragToMoveArea(
               child: Container(
-                padding: const EdgeInsets.only(left: 20),
+                padding: EdgeInsets.only(left: macOS ? 80 : 20),
                 alignment: Alignment.centerLeft,
                 child: Row(
                   children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildDot(),
-                        const SizedBox(width: 4),
-                        _buildDot(),
-                        const SizedBox(width: 4),
-                        _buildDot(),
-                      ],
-                    ),
-                    const SizedBox(width: 16),
+                    if (!macOS) ...[
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildDot(),
+                          const SizedBox(width: 4),
+                          _buildDot(),
+                          const SizedBox(width: 4),
+                          _buildDot(),
+                        ],
+                      ),
+                      const SizedBox(width: 16),
+                    ],
                     const Text(
                       'FOCSQ',
                       style: TextStyle(
@@ -63,56 +71,57 @@ class _CustomTitleBarState extends State<CustomTitleBar> {
             ),
           ),
 
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              MouseRegion(
-                onEnter: (_) => setState(() => _isHoveringMinimize = true),
-                onExit: (_) => setState(() => _isHoveringMinimize = false),
-                child: GestureDetector(
-                  onTap: () async {
-                    await windowManager.minimize();
-                  },
-                  child: Container(
-                    width: 46,
-                    height: 40,
-                    color: _isHoveringMinimize
-                        ? Colors.white.withValues(alpha: 0.1)
-                        : Colors.transparent,
-                    child: const Icon(
-                      Icons.remove_rounded,
-                      color: AppColors.textTertiary,
-                      size: 20,
+          if (!macOS)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MouseRegion(
+                  onEnter: (_) => setState(() => _isHoveringMinimize = true),
+                  onExit: (_) => setState(() => _isHoveringMinimize = false),
+                  child: GestureDetector(
+                    onTap: () async {
+                      await windowManager.minimize();
+                    },
+                    child: Container(
+                      width: 46,
+                      height: 40,
+                      color: _isHoveringMinimize
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.transparent,
+                      child: const Icon(
+                        Icons.remove_rounded,
+                        color: AppColors.textTertiary,
+                        size: 20,
+                      ),
                     ),
                   ),
                 ),
-              ),
 
-              MouseRegion(
-                onEnter: (_) => setState(() => _isHoveringClose = true),
-                onExit: (_) => setState(() => _isHoveringClose = false),
-                child: GestureDetector(
-                  onTap: () async {
-                    await windowManager.close();
-                  },
-                  child: Container(
-                    width: 46,
-                    height: 40,
-                    color: _isHoveringClose
-                        ? Colors.red.withValues(alpha: 0.9)
-                        : Colors.transparent,
-                    child: Icon(
-                      Icons.close_rounded,
+                MouseRegion(
+                  onEnter: (_) => setState(() => _isHoveringClose = true),
+                  onExit: (_) => setState(() => _isHoveringClose = false),
+                  child: GestureDetector(
+                    onTap: () async {
+                      await windowManager.close();
+                    },
+                    child: Container(
+                      width: 46,
+                      height: 40,
                       color: _isHoveringClose
-                          ? Colors.white
-                          : AppColors.textTertiary,
-                      size: 18,
+                          ? Colors.red.withValues(alpha: 0.9)
+                          : Colors.transparent,
+                      child: Icon(
+                        Icons.close_rounded,
+                        color: _isHoveringClose
+                            ? Colors.white
+                            : AppColors.textTertiary,
+                        size: 18,
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
     );
