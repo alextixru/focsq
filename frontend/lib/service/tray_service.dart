@@ -54,17 +54,21 @@ class TrayService with TrayListener {
     if (_iconSet) return;
     try {
       final linux = Platform.isLinux;
+      // [FOCSQ] macOS: строка меню берёт PNG (ICO не понимает)
+      final png = linux || Platform.isMacOS;
       final base = linux
           ? (Platform.environment['XDG_DATA_HOME'] ??
               '${Platform.environment['HOME']}/.local/share')
-          : Platform.environment['LOCALAPPDATA'];
+          : Platform.isMacOS
+              ? '${Platform.environment['HOME']}/Library/Application Support'
+              : Platform.environment['LOCALAPPDATA'];
       final dir = Directory('${base ?? Directory.systemTemp.path}'
           '${Platform.pathSeparator}FOCSQ');
       await dir.create(recursive: true);
       final asset =
-          linux ? 'assets/tray/tray_static_32.png' : 'assets/tray/tray_static.ico';
+          png ? 'assets/tray/tray_static_32.png' : 'assets/tray/tray_static.ico';
       final fileName =
-          linux ? 'tray_static_32.png' : 'tray_static.ico';
+          png ? 'tray_static_32.png' : 'tray_static.ico';
       final file = File('${dir.path}${Platform.pathSeparator}$fileName');
 
       final data = await rootBundle.load(asset);

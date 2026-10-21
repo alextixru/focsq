@@ -7,6 +7,8 @@
 #   linux:   ядро (первая реальная компиляция tun_linux.rs — netlink/ioctl
 #            писались вслепую с Windows-машины) + analyze/test фронтенда
 #            + flutter build linux → tar-артефакт
+#   macos:   ядро (tun_darwin.rs — utun через root-помощник) + flutter build
+#            macos (universal: arm64 + x86_64) → zip-артефакт с FOCSQ.app
 #
 # Пины версий повторяют среду разработки:
 #   Rust    1.97.1  (rust-version из backend/Cargo.toml)
@@ -222,13 +224,80 @@ jobs:
           path: focsq-linux-x64.tar.gz
           if-no-files-found: error
 
+  macos:
+    name: macOS universal — ядро + GUI
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # Оба таргета: cargokit и фаза «Embed csqtt-tun-helper» собирают
+      # под все ARCHS release-сборки (arm64 + x86_64) и склеивают lipo
+      - name: Rust 1.97.1
+        run: |
+          rustup set profile minimal
+          rustup toolchain install 1.97.1 --profile minimal \
+            --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup default 1.97.1
+
+      - name: Кэш Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: cargo-macos-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: cargo-macos-
+
+      - name: Ядро — компиляция
+        working-directory: backend
+        run: cargo check --all-targets --locked
+
+      - name: Ядро — тесты
+        working-directory: backend
+        run: cargo test --lib --locked
+
+      - name: Flutter 3.44.9
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.9'
+          channel: stable
+
+      - name: Зависимости фронтенда
+        working-directory: frontend
+        run: flutter pub get
+
+      # cargokit (rust_builder) собирает staticlib моста; фаза Runner
+      # «Embed csqtt-tun-helper» кладёт root-помощник utun в Contents/MacOS.
+      # Подпись ad-hoc («Sign to Run Locally») — без сертификатов.
+      - name: Сборка GUI (release)
+        working-directory: frontend
+        run: flutter build macos --release
+
+      # ditto, а не zip: внутри .app симлинки фреймворков и подписи
+      - name: ZIP-артефакт
+        run: |
+          app=frontend/build/macos/Build/Products/Release/FOCSQ.app
+          test -x "$app/Contents/MacOS/csqtt-tun-helper"
+          lipo -info "$app/Contents/MacOS/FOCSQ" "$app/Contents/MacOS/csqtt-tun-helper"
+          ditto -c -k --sequesterRsrc --keepParent "$app" focsq-macos.zip
+          ls -lh focsq-macos.zip
+
+      - name: Публикация артефакта
+        uses: actions/upload-artifact@v4
+        with:
+          name: focsq-macos
+          path: focsq-macos.zip
+          if-no-files-found: error
+
   # Тег v* → Release на GitHub с вложениями-сборками. Приложение
   # проверяет /releases/latest (UpdateService) — Draft/pre-release
   # игнорируются API.
   release:
     name: Release на GitHub
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux]
+    needs: [windows, linux, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -260,6 +329,7 @@ jobs:
             echo '## Установка'
             echo '- **Windows**: `FOCSQ-Setup.exe` — установщик (Inno Setup). Альтернатива без установки: распаковать `focsq-windows-x64.zip`, запустить `focsq.exe`.'
             echo '- **Linux**: распаковать `focsq-linux-x64.tar.gz`, запустить `focsq.sh` (он сам поставит зависимости, выдаст cap_net_admin через focsq-tun и запустит приложение).'
+            echo '- **macOS** (12+, Apple Silicon и Intel): распаковать `focsq-macos.zip`, перенести `FOCSQ.app` в «Программы», первый запуск — правый клик → «Открыть». При подключении macOS спросит пароль администратора (настройка туннеля).'
           } > notes.md
 
       # gh на ubuntu-runner предустановлен и аутентифицирован через
@@ -277,4 +347,5 @@ jobs:
             --notes-file notes.md \
             dist/focsq-windows-x64.zip \
             dist/focsq-linux-x64.tar.gz \
+            dist/focsq-macos.zip \
             dist/FOCSQ-Setup.exe

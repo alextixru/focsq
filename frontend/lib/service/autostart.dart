@@ -33,6 +33,7 @@ class AutostartService {
   static Future<bool> isEnabled() async {
     await init();
     if (Platform.isLinux) return _linuxIsEnabled();
+    if (Platform.isMacOS) return _macosIsEnabled();
     if (!Platform.isWindows) return false;
     try {
       final result = await _run(['/Query', '/TN', _taskName]);
@@ -46,6 +47,7 @@ class AutostartService {
   static Future<bool> enable() async {
     await init();
     if (Platform.isLinux) return _linuxEnable();
+    if (Platform.isMacOS) return _macosEnable();
     if (!Platform.isWindows) {
       LogService().add(
         '[АВТОСТАРТ] На этой платформе автозапуск не поддерживается',
@@ -80,6 +82,7 @@ class AutostartService {
   static Future<bool> disable() async {
     await init();
     if (Platform.isLinux) return _linuxDisable();
+    if (Platform.isMacOS) return _macosDisable();
     if (!Platform.isWindows) return false;
     try {
       final result = await _run(['/Delete', '/TN', _taskName, '/F']);
@@ -157,6 +160,81 @@ class AutostartService {
       if (await file.exists()) {
         await file.delete();
         LogService().add('[АВТОСТАРТ] Запись удалена');
+      }
+      return true;
+    } catch (error) {
+      LogService().add('[АВТОСТАРТ] Ошибка выключения: $error');
+      return false;
+    }
+  }
+
+  // [FOCSQ] macOS: LaunchAgent пользователя — запуск при входе в систему.
+  // Права на туннель приложению не нужны: root-помощника ядро запросит
+  // само при подключении (системный диалог пароля).
+  static const String _macosAgentLabel = 'app.focsq.autostart';
+
+  static String? _macosAgentFile() {
+    final home = Platform.environment['HOME'];
+    if (home == null) return null;
+    return '$home/Library/LaunchAgents/$_macosAgentLabel.plist';
+  }
+
+  static String _xmlEscape(String value) => value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+
+  static String buildLaunchAgent(String execPath, [String args = _args]) {
+    return '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0">\n'
+        '<dict>\n'
+        '  <key>Label</key>\n'
+        '  <string>$_macosAgentLabel</string>\n'
+        '  <key>ProgramArguments</key>\n'
+        '  <array>\n'
+        '    <string>${_xmlEscape(execPath)}</string>\n'
+        '    <string>${_xmlEscape(args)}</string>\n'
+        '  </array>\n'
+        '  <key>RunAtLoad</key>\n'
+        '  <true/>\n'
+        '</dict>\n'
+        '</plist>\n';
+  }
+
+  static Future<bool> _macosIsEnabled() async {
+    final path = _macosAgentFile();
+    return path != null && File(path).existsSync();
+  }
+
+  static Future<bool> _macosEnable() async {
+    final path = _macosAgentFile();
+    final launcher = _launcherPath();
+    if (path == null || launcher == null) {
+      LogService().add('[АВТОСТАРТ] Нет HOME — некуда писать LaunchAgent');
+      return false;
+    }
+    try {
+      final file = File(path);
+      await file.parent.create(recursive: true);
+      await file.writeAsString(buildLaunchAgent(launcher), flush: true);
+      LogService().add('[АВТОСТАРТ] LaunchAgent создан: $path');
+      return true;
+    } catch (error) {
+      LogService().add('[АВТОСТАРТ] Ошибка включения: $error');
+      return false;
+    }
+  }
+
+  static Future<bool> _macosDisable() async {
+    final path = _macosAgentFile();
+    if (path == null) return false;
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+        LogService().add('[АВТОСТАРТ] LaunchAgent удалён');
       }
       return true;
     } catch (error) {

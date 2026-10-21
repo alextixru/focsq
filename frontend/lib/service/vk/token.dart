@@ -12,7 +12,11 @@ import '../logs.dart';
 class VkToken {
   VkToken._();
 
-  static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  // [FOCSQ] macOS: связка ключей входа (legacy keychain) — Data Protection
+  // Keychain требует подписи с командой разработчика, а сборка ad-hoc.
+  static const FlutterSecureStorage _storage = FlutterSecureStorage(
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+  );
   static const String _key = 'vk_eternal_token';
 
   static String? lastNotice;
@@ -24,8 +28,10 @@ class VkToken {
         (Platform.isLinux
             ? (Platform.environment['XDG_DATA_HOME'] ??
                 '${Platform.environment['HOME']}/.local/share')
-            : (Platform.environment['APPDATA'] ??
-                Directory.systemTemp.path));
+            : Platform.isMacOS
+                ? '${Platform.environment['HOME']}/Library/Application Support'
+                : (Platform.environment['APPDATA'] ??
+                    Directory.systemTemp.path));
     return File(
         '$base${Platform.pathSeparator}focsq${Platform.pathSeparator}vk_token');
   }
@@ -133,7 +139,7 @@ class VkToken {
       final file = _fallbackFile;
       await file.parent.create(recursive: true);
       await file.writeAsString(token, flush: true);
-      if (Platform.isLinux) {
+      if (Platform.isLinux || Platform.isMacOS) {
 
         await Process.run('chmod', ['600', file.path]);
       }

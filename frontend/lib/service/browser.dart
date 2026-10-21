@@ -28,6 +28,9 @@ class UrlService {
       if (Platform.isLinux) {
         return _run(['xdg-open', safe]);
       }
+      if (Platform.isMacOS) {
+        return _run(['/usr/bin/open', safe]);
+      }
       LogService().add('[СЕРВИС] Открытие браузера на этой ОС не поддержано');
       return Future.value(false);
     } on FormatException catch (error) {
