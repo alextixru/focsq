@@ -34,4 +34,8 @@ FOCSQ core bridge (flutter_rust_bridge).
     'DEFINES_MODULE' => 'YES',
     'OTHER_LDFLAGS' => '-force_load ${BUILT_PRODUCTS_DIR}/librust_lib_frontend.a',
   }
+  # Системные зависимости staticlib (cargo rustc -- --print native-static-libs):
+  # #[link]-директивы Rust в staticlib до финальной линковки не доходят
+  s.frameworks = 'SystemConfiguration', 'Security', 'CoreFoundation'
+  s.libraries = 'iconv'
 end
