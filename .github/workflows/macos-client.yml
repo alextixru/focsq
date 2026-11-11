@@ -51,20 +51,30 @@ jobs:
       - name: Build app
         working-directory: frontend
         run: flutter build macos --release --build-name=2.5.0 --build-number=${{ github.run_number }}
+      - name: Package
+        run: |
+          app=frontend/build/macos/Build/Products/Release/FOCSQ.app
+          ditto -c -k --sequesterRsrc --keepParent "$app" csqtt-2.5.0-macos-universal.zip
+          shasum -a 256 csqtt-2.5.0-macos-universal.zip > SHA256SUMS.txt
       - name: Check architecture, signature and startup
         run: |
           app=frontend/build/macos/Build/Products/Release/FOCSQ.app
           test -x "$app/Contents/MacOS/csqtt-tun-helper"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/FOCSQ"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/csqtt-tun-helper"
-          codesign --verify --deep --strict "$app"
+          lipo "$app/Contents/MacOS/FOCSQ" -archs
+          lipo "$app/Contents/MacOS/FOCSQ" -verify_arch arm64 x86_64
+          lipo "$app/Contents/MacOS/csqtt-tun-helper" -archs
+          lipo "$app/Contents/MacOS/csqtt-tun-helper" -verify_arch arm64 x86_64
+          codesign --verify --deep --strict --verbose=2 "$app"
           python3 - <<'PY'
           import subprocess, time
+          from pathlib import Path
           with open('app-startup.log', 'w') as log:
               app = subprocess.Popen(['frontend/build/macos/Build/Products/Release/FOCSQ.app/Contents/MacOS/FOCSQ'], stdout=log, stderr=log)
               try:
                   time.sleep(10)
                   if app.poll() is not None:
+                      log.flush()
+                      print(Path('app-startup.log').read_text(errors='replace'))
                       raise SystemExit(f'App exited during startup: {app.returncode}')
               finally:
                   app.terminate()
@@ -74,11 +84,6 @@ jobs:
                       app.kill()
                       app.wait()
           PY
-      - name: Package
-        run: |
-          app=frontend/build/macos/Build/Products/Release/FOCSQ.app
-          ditto -c -k --sequesterRsrc --keepParent "$app" csqtt-2.5.0-macos-universal.zip
-          shasum -a 256 csqtt-2.5.0-macos-universal.zip > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: csqtt-2.5.0-macos-universal
@@ -87,6 +92,15 @@ jobs:
             SHA256SUMS.txt
             MACOS.md
           if-no-files-found: error
+      - name: Preserve built app for diagnostics if validation fails
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: macos-diagnostics-unverified
+          path: |
+            csqtt-2.5.0-macos-universal.zip
+            SHA256SUMS.txt
+          if-no-files-found: ignore
       - uses: actions/cache/save@v4
         if: always() && steps.cargo-cache.outputs.cache-hit != 'true'
         with:
