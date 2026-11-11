@@ -23,13 +23,15 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
           rustup default 1.97.1
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cargo-cache
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             backend-v250/target
-          key: csqtt-v250-macos-${{ hashFiles('backend-v250/Cargo.lock') }}
+          key: csqtt-v250-macos-${{ hashFiles('backend-v250/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: csqtt-v250-macos-${{ hashFiles('backend-v250/Cargo.lock') }}-
       - name: Check and test the macOS engine
         working-directory: backend-v250
         run: |
@@ -85,6 +87,14 @@ jobs:
             SHA256SUMS.txt
             MACOS.md
           if-no-files-found: error
+      - uses: actions/cache/save@v4
+        if: always() && steps.cargo-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend-v250/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

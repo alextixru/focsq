@@ -69,7 +69,7 @@ void main() {
   test('releasesPage указывает на GitHub-репозиторий проекта', () {
     expect(
       UpdateService.releasesPage,
-      contains('github.com/luminescq/focsq'),
+      contains('github.com/alextixru/focsq'),
     );
     expect(
       UpdateService.releasesPage,
