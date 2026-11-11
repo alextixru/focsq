@@ -1,0 +1,115 @@
+name: CSQTT 2.5.0 macOS client
+
+on:
+  push:
+    branches: [macos/csqtt-2.5.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS universal app
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup default 1.97.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend-v250/target
+          key: csqtt-v250-macos-${{ hashFiles('backend-v250/Cargo.lock') }}
+      - name: Check and test the macOS engine
+        working-directory: backend-v250
+        run: |
+          cargo check --all-targets --locked
+          cargo test --lib --locked
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.9'
+          channel: stable
+          cache: true
+      - name: Flutter dependencies, analysis and tests
+        working-directory: frontend
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos
+          flutter test
+      - name: Build app
+        working-directory: frontend
+        run: flutter build macos --release --build-name=2.5.0 --build-number=${{ github.run_number }}
+      - name: Check architecture, signature and startup
+        run: |
+          app=frontend/build/macos/Build/Products/Release/FOCSQ.app
+          test -x "$app/Contents/MacOS/csqtt-tun-helper"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/FOCSQ"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/csqtt-tun-helper"
+          codesign --verify --deep --strict "$app"
+          python3 - <<'PY'
+          import subprocess, time
+          with open('app-startup.log', 'w') as log:
+              app = subprocess.Popen(['frontend/build/macos/Build/Products/Release/FOCSQ.app/Contents/MacOS/FOCSQ'], stdout=log, stderr=log)
+              try:
+                  time.sleep(10)
+                  if app.poll() is not None:
+                      raise SystemExit(f'App exited during startup: {app.returncode}')
+              finally:
+                  app.terminate()
+                  try:
+                      app.wait(timeout=10)
+                  except subprocess.TimeoutExpired:
+                      app.kill()
+                      app.wait()
+          PY
+      - name: Package
+        run: |
+          app=frontend/build/macos/Build/Products/Release/FOCSQ.app
+          ditto -c -k --sequesterRsrc --keepParent "$app" csqtt-2.5.0-macos-universal.zip
+          shasum -a 256 csqtt-2.5.0-macos-universal.zip > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: csqtt-2.5.0-macos-universal
+          path: |
+            csqtt-2.5.0-macos-universal.zip
+            SHA256SUMS.txt
+            MACOS.md
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-startup-log
+          path: app-startup.log
+          if-no-files-found: ignore
+
+  release:
+    name: Publish client preview
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: csqtt-2.5.0-macos-universal
+          path: dist
+      - name: Publish versioned prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: macos-2.5.0-build-${{ github.run_number }}
+        run: |
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
+            --title "CSQTT 2.5.0 macOS — build ${{ github.run_number }}" \
+            --notes-file MACOS.md \
+            dist/csqtt-2.5.0-macos-universal.zip dist/SHA256SUMS.txt

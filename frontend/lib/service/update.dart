@@ -1,4 +1,4 @@
-﻿// SPDX-FileCopyrightText: 2026 luminescq
+// SPDX-FileCopyrightText: 2026 luminescq
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import 'dart:async';
 import 'dart:convert';
@@ -59,9 +59,9 @@ class UpdateService {
   UpdateService._();
 
   static const String _releasesApi =
-      'https://api.github.com/repos/luminescq/focsq/releases/latest';
+      'https://api.github.com/repos/alextixru/focsq/releases/latest';
   static const String _releasesPage =
-      'https://github.com/luminescq/focsq/releases';
+      'https://github.com/alextixru/focsq/releases';
 
   static const Duration _autoInterval = Duration(hours: 6);
 

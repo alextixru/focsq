@@ -8,7 +8,6 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.12.0"
-csqtt-core = { path = "../../backend" }
 anyhow = "1.0"
 tokio-util = "0.7.19"
 
@@ -16,4 +15,11 @@ tokio-util = "0.7.19"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 
 [patch.crates-io]
-primp = { path = "../../backend/vendor/primp" }
+primp = { path = "../../backend-v250/vendor/primp" }
+netstack-smoltcp = { path = "../../backend-v250/vendor/netstack-smoltcp" }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+csqtt-core = { path = "../../backend" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+csqtt-core-v250 = { path = "../../backend-v250" }

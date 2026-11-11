@@ -1,4 +1,4 @@
-﻿// SPDX-FileCopyrightText: 2026 luminescq
+// SPDX-FileCopyrightText: 2026 luminescq
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import 'dart:async';
 import 'dart:convert';
@@ -307,7 +307,7 @@ class ConnectService extends ChangeNotifier {
 
       fingerprint: settings.fingerprint.toLowerCase(),
       clientIds: _defaultClientIds,
-      obfs: 'audio',
+      obfs: Platform.isMacOS ? 'unified' : 'audio',
       generation: BigInt.from(_nextGeneration()),
       salt: _generateSalt(),
 
@@ -436,7 +436,7 @@ class ConnectService extends ChangeNotifier {
         notifyListeners();
 
       case 'ERROR':
-        final code = (payload['code'] as num?)?.toInt() ?? 0;
+        final code = payload['code']?.toString() ?? 'unknown';
         final message = payload['message']?.toString() ?? '';
         final fatal = payload['fatal'] == true;
         _log('[ЯДРО] ${fatal ? 'ФАТАЛЬНО' : 'Ошибка'} ($code) $message');
